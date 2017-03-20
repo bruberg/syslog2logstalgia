@@ -1,0 +1,64 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Date::Parse;
+use Net::Syslogd;
+
+# Don't buffer anything; push everything to logstalgia right away.
+$|++;
+
+my $syslogd = Net::Syslogd->new (
+                                 -LocalPort => 1514
+                                )
+  or die "Error creating Syslogd listener: ", Net::Syslogd->error;
+
+while (1) {
+  my $message = $syslogd->get_message();
+
+  if (!defined ($message)) {
+    printf "$0: %s\n", Net::Syslogd->error;
+    exit 1;
+  } elsif ($message == 0) {
+    next;
+  }
+
+  if (!defined ($message->process_message ())) {
+    printf "$0: %s\n", Net::Syslogd->error
+  } else {
+    # add the interfaces (physical or logical) you wish to monitor
+    if ($message->message =~ /in:(ether0|ether1|ether2)/) {
+      my $responsecode = 200;
+      my $string = $message->message;
+      my $time   = str2time ($message->time);
+      if ($string =~ /proto (UDP|TCP)(?: [^,]+)?, \[?(\d+\.\d+\.\d+\.\d+|[0-9a-f:]+)\]?:(\d+)->\[?(?:\d+\.\d+\.\d+\.\d+|[0-9a-f:]+)\]?:(\d+), .*len (\d+)$/) {
+        # print "# $string\n";
+        my $proto   = $1;
+        my $srcip   = $2;
+        my $srcport = $3;
+        my $dstport = $4;
+        my $size    = $5;
+        my $path    = $proto . ":" . $dstport;
+        print "$time\|$srcip\|$path\|$srcport\|$size\|1\n";
+      } elsif ($string =~ /proto ICMP \(type (\d+), code (\d+)\), \[?(\d+\.\d+\.\d+\.\d+|[0-9a-f:]+)\]?->\[?(?:\d+\.\d+\.\d+\.\d+|[0-9a-f:]+)\]?, len (\d+)$/){
+        # print $string, "\n";
+        my $type    = $1;
+        my $code    = $2;
+        my $srcip   = $3;
+        my $size    = $4;
+        my $path    = "ICMP:" . $type . "/" . $code;
+        print "$time\|$srcip\|$path\|*\|$size\|1\n";
+      }
+    } elsif ($message->message =~ /,(\d+\.\d+\.\d+\.\d+)\] login attempt \[(.+)\/(.+)\] (succeeded|failed)/) {
+      # Kippo logs
+      # 2016-02-08 12:29:18+0100 [SSHService ssh-userauth on HoneyPotTransport,11,46.175.161.195] login attempt [root/123456] succeeded
+      my $time   = str2time ($message->time);
+      my $srcip  = $1;
+      my $user   = $2;
+      my $pass   = $3;
+      my $status = ($4 eq 'failed' ? 1 : 0);
+      print "$time\|$srcip\|$user\|$pass\|20|$status\n";
+    }
+  }
+}
+

@@ -1,0 +1,55 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use File::Tail;
+use Date::Parse;
+use Data::Dumper;
+use Parse::Syslog;
+use vars qw (@hosts);
+
+# Interesting hosts, ignore everything else
+@hosts = ('corerouter', 'firewall', 'honeypotrouter');
+
+# You shouldn't have to edit anything below here
+
+# Don't buffer anything; push everything to logstalgia right away.
+$|++;
+
+my $file = File::Tail->new (name => '/var/log/syslog');
+my $syslog = Parse::Syslog->new ($file);
+
+while (my $parsed = $syslog->next) {
+  if (grep (/^$parsed->{host}$/, @hosts)) {
+    my $string = $parsed->{text};
+    my $time   = $parsed->{timestamp};
+
+    if ($string =~ /proto (UDP|TCP)(?: [^,]+)?, \[?(\d+\.\d+\.\d+\.\d+|[0-9a-f:]+)\]?:(\d+)->\[?(?:\d+\.\d+\.\d+\.\d+|[0-9a-f:]+)\]?:(\d+), .*len (\d+)$/) {
+      my $proto   = $1;
+      my $srcip   = $2;
+      my $srcport = $3;
+      my $dstport = $4;
+      my $size    = $5;
+      my $path    = $proto . ":" . $dstport;
+      print "$time\|$srcip\|$path\|$srcport\|$size\|1\n";
+    } elsif ($string =~ /proto ICMP \(type (\d+), code (\d+)\), \[?(\d+\.\d+\.\d+\.\d+|[0-9a-f:]+)\]?->\[?(?:\d+\.\d+\.\d+\.\d+|[0-9a-f:]+)\]?, len (\d+)$/){
+      my $type    = $1;
+      my $code    = $2;
+      my $srcip   = $3;
+      my $size    = $4;
+      my $path    = "ICMP:" . $type . "/" . $code;
+      print "$time\|$srcip\|$path\|*\|$size\|1\n";
+    } elsif ($string =~ /,(\d+\.\d+\.\d+\.\d+)\] login attempt \[(.+)\/(.+)\] (succeeded|failed)/) {
+      my $srcip  = $1;
+      my $user   = $2;
+      my $pass   = $3;
+      # Return '1' if failed (will bounce)
+      # or '0' if succeeded (will pass through paddle).
+      my $status = ($4 eq 'failed' ? 1 : 0);
+      print "$time\|$srcip\|$user\|$pass\|20|$status\n";
+    }
+  }
+}
+exit 0;
+
+
